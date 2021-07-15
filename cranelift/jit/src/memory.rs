@@ -49,6 +49,7 @@ impl PtrLen {
     fn with_size(size: usize) -> io::Result<Self> {
         assert_ne!(size, 0);
         let page_size = region::page::size();
+        let size = std::cmp::max(500<<10, size); // TODO: report / upstream fix for this?
         let alloc_size = region::page::ceil(size);
         let layout = alloc::Layout::from_size_align(alloc_size, page_size).unwrap();
         // Safety: We assert that the size is non-zero above.

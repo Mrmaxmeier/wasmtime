@@ -1662,4 +1662,43 @@ block0:
         assert_eq!(8, greatest_divisible_power_of_two(24));
         assert_eq!(1, greatest_divisible_power_of_two(25));
     }
+
+    #[test]
+    fn ssa_state_machine_hang() {
+        let sig = Signature::new(CallConv::SystemV);
+
+        let mut fn_ctx = FunctionBuilderContext::new();
+        let mut func = Function::with_name_signature(ExternalName::testcase("sample"), sig);
+        {
+            let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
+
+            let a = Variable::new(0);
+            builder.declare_var(a, I32);
+
+            let entry = builder.create_block();
+            let block1 = builder.create_block();
+            let use_block = builder.create_block();
+
+            // fill entry block
+            builder.switch_to_block(entry);
+            use cranelift_codegen::ir::TrapCode;
+            builder.ins().trap(TrapCode::User(0));
+
+            // fill block1 with back edge
+            builder.switch_to_block(block1);
+            let cond = builder.ins().iconst(I32, 42);
+            builder.ins().brnz(cond, block1, &[]);
+            builder.ins().jump(use_block, &[]);
+
+            // use variable in use_block
+            builder.switch_to_block(use_block);
+            let _ = builder.use_var(a);
+            builder.ins().return_(&[]);
+
+            println!("sealing blocks...");
+            builder.seal_all_blocks(); // hangs
+            builder.finalize();
+        }
+        println!("{}", func.display(None).to_string());
+    }
 }
