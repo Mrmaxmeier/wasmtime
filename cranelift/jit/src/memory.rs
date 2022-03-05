@@ -49,7 +49,14 @@ impl PtrLen {
     fn with_size(size: usize) -> io::Result<Self> {
         assert_ne!(size, 0);
         let page_size = region::page::size();
-        let size = std::cmp::max(500<<10, size); // TODO: report / upstream fix for this?
+        // HACK: always allocate a large enough code page, so that we don't have to resize it later
+        // resizes have issues with 32-bit relocations in unlucky address-space situations.
+        // thread '<unnamed>' panicked at 'called `Result::unwrap()` on an `Err` value: TryFromIntError(())'
+        // compiled_blob.rs:52
+        //     let pcrel = i32::try_from((what as isize) - (at as isize)).unwrap();
+        let max_code_size = 1<<20; // 1MB
+        assert!(size <= max_code_size);
+        let size = max_code_size;
         let alloc_size = region::page::ceil(size);
         let layout = alloc::Layout::from_size_align(alloc_size, page_size).unwrap();
         // Safety: We assert that the size is non-zero above.
