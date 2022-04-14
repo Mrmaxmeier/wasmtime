@@ -22,7 +22,7 @@ anyhow = { workspace = true }
 region = "2.2.0"
 libc = { workspace = true }
 target-lexicon = { workspace = true }
-memmap2 = { version = "0.2.1", optional = true }
+nix = "0.23.1"
 log = { workspace = true }
 wasmtime-jit-icache-coherence = { workspace = true }
 
@@ -33,10 +33,6 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
 ]
-
-[features]
-selinux-fix = ['memmap2']
-default = []
 
 [dev-dependencies]
 cranelift = { path = "../umbrella" }
