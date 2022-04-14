@@ -19,7 +19,7 @@ cranelift-frontend = { workspace = true }
 cranelift-interpreter = { workspace = true }
 cranelift-native = { workspace = true }
 cranelift-reader = { workspace = true }
-cranelift-jit = { workspace = true, features = ["selinux-fix"] }
+cranelift-jit = { workspace = true, features = [] } # "selinux-fix"] }
 cranelift-module = { workspace = true }
 cranelift-control = { workspace = true }
 file-per-thread-logger = { workspace = true }

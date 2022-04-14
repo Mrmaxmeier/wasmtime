@@ -31,6 +31,7 @@ pub struct JITBuilder {
     lookup_symbols: Vec<Box<dyn Fn(&str) -> Option<*const u8> + Send>>,
     libcall_names: Box<dyn Fn(ir::LibCall) -> String + Send + Sync>,
     hotswap_enabled: bool,
+    reserve_memory_size: usize,
 }
 
 impl JITBuilder {
@@ -89,11 +90,13 @@ impl JITBuilder {
     ) -> Self {
         let symbols = HashMap::new();
         let lookup_symbols = vec![Box::new(lookup_with_dlsym) as Box<_>];
+        let reserve_memory_size = 32 << 20; // reserve 32MB (8192 pages with standard 4k pages)
         Self {
             isa,
             symbols,
             lookup_symbols,
             libcall_names,
+            reserve_memory_size,
             hotswap_enabled: false,
         }
     }
@@ -154,6 +157,15 @@ impl JITBuilder {
         self.hotswap_enabled = enabled;
         self
     }
+
+    /// Set the allocation size for the module's code and data areas.
+    ///
+    /// This implementation allocates the address space up-front. Pages are then given out lazily
+    /// and the allocator bails if the reserved spaces was exceeded.
+    pub fn reserve_memory_area(&mut self, size: usize) -> &mut Self {
+        self.reserve_memory_size = size;
+        self
+    }
 }
 
 /// A pending update to the GOT.
@@ -184,7 +196,7 @@ pub struct JITModule {
     symbols: RefCell<HashMap<String, SendWrapper<*const u8>>>,
     lookup_symbols: Vec<Box<dyn Fn(&str) -> Option<*const u8> + Send>>,
     libcall_names: Box<dyn Fn(ir::LibCall) -> String + Send + Sync>,
-    memory: MemoryHandle,
+    memory: Memory,
     declarations: ModuleDeclarations,
     function_got_entries: SecondaryMap<FuncId, Option<SendWrapper<NonNull<AtomicPtr<u8>>>>>,
     function_plt_entries: SecondaryMap<FuncId, Option<SendWrapper<NonNull<[u8; 16]>>>>,
@@ -200,13 +212,6 @@ pub struct JITModule {
     pending_got_updates: Vec<GotUpdate>,
 }
 
-/// A handle to allow freeing memory allocated by the `Module`.
-struct MemoryHandle {
-    code: Memory,
-    readonly: Memory,
-    writable: Memory,
-}
-
 impl JITModule {
     /// Free memory allocated for code and data segments of compiled functions.
     ///
@@ -217,9 +222,7 @@ impl JITModule {
     /// from that module are currently executing and none of the `fn` pointers
     /// are called afterwards.
     pub unsafe fn free_memory(mut self) {
-        self.memory.code.free_memory();
-        self.memory.readonly.free_memory();
-        self.memory.writable.free_memory();
+        self.memory.free();
     }
 
     fn lookup_symbol(&self, name: &str) -> Option<*const u8> {
@@ -242,12 +245,11 @@ impl JITModule {
     fn new_got_entry(&mut self, val: *const u8) -> NonNull<AtomicPtr<u8>> {
         let got_entry = self
             .memory
-            .writable
-            .allocate(
+            .allocate_readwrite(
                 std::mem::size_of::<AtomicPtr<u8>>(),
                 std::mem::align_of::<AtomicPtr<u8>>().try_into().unwrap(),
             )
-            .unwrap()
+            .expect("TODO: handle OOM etc.")
             .cast::<AtomicPtr<u8>>();
         unsafe {
             std::ptr::write(got_entry, AtomicPtr::new(val as *mut _));
@@ -258,14 +260,13 @@ impl JITModule {
     fn new_plt_entry(&mut self, got_entry: NonNull<AtomicPtr<u8>>) -> NonNull<[u8; 16]> {
         let plt_entry = self
             .memory
-            .code
-            .allocate(
+            .allocate_readexec(
                 std::mem::size_of::<[u8; 16]>(),
                 self.isa
                     .symbol_alignment()
                     .max(self.isa.function_alignment().minimum as u64),
             )
-            .unwrap()
+            .expect("TODO: handle OOM etc.")
             .cast::<[u8; 16]>();
         unsafe {
             Self::write_plt_entry_bytes(plt_entry, got_entry);
@@ -493,8 +494,7 @@ impl JITModule {
         }
 
         // Now that we're done patching, prepare the memory for execution!
-        self.memory.readonly.set_readonly()?;
-        self.memory.code.set_readable_and_executable()?;
+        self.memory.finalize();
 
         for update in self.pending_got_updates.drain(..) {
             unsafe { update.entry.as_ref() }.store(update.ptr as *mut _, Ordering::SeqCst);
@@ -523,12 +523,7 @@ impl JITModule {
             symbols: RefCell::new(builder.symbols),
             lookup_symbols: builder.lookup_symbols,
             libcall_names: builder.libcall_names,
-            memory: MemoryHandle {
-                code: Memory::new(branch_protection),
-                // Branch protection is not applicable to non-executable memory.
-                readonly: Memory::new(BranchProtection::None),
-                writable: Memory::new(BranchProtection::None),
-            },
+            memory: Memory::new(branch_protection, builder.reserve_memory_size),
             declarations: ModuleDeclarations::default(),
             function_got_entries: SecondaryMap::new(),
             function_plt_entries: SecondaryMap::new(),
@@ -710,14 +705,13 @@ impl Module for JITModule {
         let align = alignment
             .max(self.isa.function_alignment().minimum as u64)
             .max(self.isa.symbol_alignment());
-        let ptr = self
-            .memory
-            .code
-            .allocate(size, align)
-            .map_err(|e| ModuleError::Allocation {
-                message: "unable to alloc function",
-                err: e,
-            })?;
+        let ptr =
+            self.memory
+                .allocate_readexec(size, align)
+                .map_err(|e| ModuleError::Allocation {
+                    message: "unable to alloc function",
+                    err: e,
+                })?;
 
         {
             let mem = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
@@ -795,14 +789,13 @@ impl Module for JITModule {
         let align = alignment
             .max(self.isa.function_alignment().minimum as u64)
             .max(self.isa.symbol_alignment());
-        let ptr = self
-            .memory
-            .code
-            .allocate(size, align)
-            .map_err(|e| ModuleError::Allocation {
-                message: "unable to alloc function bytes",
-                err: e,
-            })?;
+        let ptr =
+            self.memory
+                .allocate_readexec(size, align)
+                .map_err(|e| ModuleError::Allocation {
+                    message: "unable to alloc function bytes",
+                    err: e,
+                })?;
 
         unsafe {
             ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, size);
@@ -874,16 +867,14 @@ impl Module for JITModule {
             usize::try_from(align.unwrap_or(WRITABLE_DATA_ALIGNMENT)).unwrap() as *mut u8
         } else if decl.writable {
             self.memory
-                .writable
-                .allocate(size, align.unwrap_or(WRITABLE_DATA_ALIGNMENT))
+                .allocate_readwrite(size, align.unwrap_or(WRITABLE_DATA_ALIGNMENT))
                 .map_err(|e| ModuleError::Allocation {
                     message: "unable to alloc writable data",
                     err: e,
                 })?
         } else {
             self.memory
-                .readonly
-                .allocate(size, align.unwrap_or(READONLY_DATA_ALIGNMENT))
+                .allocate_readonly(size, align.unwrap_or(READONLY_DATA_ALIGNMENT))
                 .map_err(|e| ModuleError::Allocation {
                     message: "unable to alloc readonly data",
                     err: e,

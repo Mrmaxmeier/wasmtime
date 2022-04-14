@@ -7,7 +7,9 @@
 
 mod backend;
 mod compiled_blob;
-mod memory;
+// mod memory;
+mod memory2;
+use memory2 as memory;
 
 pub use crate::backend::{JITBuilder, JITModule};
 
