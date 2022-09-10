@@ -236,7 +236,13 @@ pub unsafe fn catch_traps<F>(
 where
     F: FnMut(*mut VMContext),
 {
-    let limits = Instance::from_vmctx(caller, |i| i.runtime_limits());
+    let dummy_limits: VMRuntimeLimits = VMRuntimeLimits::default();
+    let mut dummy_limits_ptr = &dummy_limits as *const _;
+    let limits = if caller != std::ptr::null_mut() {
+        Instance::from_vmctx(caller, |i| i.runtime_limits())
+    } else {
+        &mut dummy_limits_ptr as *mut _
+    };
 
     let result = CallThreadState::new(signal_handler, capture_backtrace, capture_coredump, *limits)
         .with(|cx| {
