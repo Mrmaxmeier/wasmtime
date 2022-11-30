@@ -183,11 +183,11 @@ impl Memory {
 
 impl Drop for Memory {
     fn drop(&mut self) {
-        let is_live = self.segments.iter().any(|seg| seg.finalized);
-        if !is_live && self.ptr != ptr::null_mut() {
-            // memory is unused, we can free this region
-            unsafe { self.free() };
-            panic!();
-        }
+        if self.ptr == ptr::null_mut() { return; }
+        let _is_live = self.segments.iter().any(|seg| seg.finalized);
+        // TODO: ensure that memory is actually unused
+        // assert!(!is_live);
+        // memory is unused, we can free this region
+        unsafe { self.free() };
     }
 }
