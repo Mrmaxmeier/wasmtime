@@ -295,17 +295,52 @@ impl JITModule {
 
     unsafe fn write_plt_entry_bytes(plt_ptr: *mut [u8; 16], got_ptr: NonNull<AtomicPtr<u8>>) {
         assert!(
-            cfg!(target_arch = "x86_64"),
-            "PLT is currently only supported on x86_64"
+            cfg!(any(target_arch = "x86_64", target_arch = "aarch64")),
+            "PLT is currently only supported on x86_64 and aarch64"
         );
-        // jmp *got_ptr; ud2; ud2; ud2; ud2; ud2
-        let mut plt_val = [
-            0xff, 0x25, 0, 0, 0, 0, 0x0f, 0x0b, 0x0f, 0x0b, 0x0f, 0x0b, 0x0f, 0x0b, 0x0f, 0x0b,
-        ];
-        let what = got_ptr.as_ptr() as isize - 4;
-        let at = plt_ptr as isize + 2;
-        plt_val[2..6].copy_from_slice(&i32::to_ne_bytes(i32::try_from(what - at).unwrap()));
-        std::ptr::write(plt_ptr, plt_val);
+        if cfg!(target_arch = "x86_64") {
+            // jmp *got_ptr; ud2; ud2; ud2; ud2; ud2
+            let mut plt_val = [
+                0xff, 0x25, 0, 0, 0, 0, 0x0f, 0x0b, 0x0f, 0x0b, 0x0f, 0x0b, 0x0f, 0x0b, 0x0f, 0x0b,
+            ];
+            let what = got_ptr.as_ptr() as isize - 4;
+            let at = plt_ptr as isize + 2;
+            plt_val[2..6].copy_from_slice(&i32::to_ne_bytes(i32::try_from(what - at).unwrap()));
+            std::ptr::write(plt_ptr, plt_val);
+        } else if cfg!(target_arch = "aarch64") {
+            /*
+            @bjorn3:
+            This is one of the plt entries of an executable I compiled on my phone:
+            90 01 00 B0    adrp x16, #0x31000
+            11 F2 46 F9    ldr  x17, [x16, #0xde0]
+            10 82 37 91    add  x16, x16, #0xde0
+            20 02 1F D6    br   x17
+            */
+            /*
+            let mut plt_val = [
+                // adrp x16, #relpage
+                0x90, 0x01, 0x00, 0xb0,
+                // ldr x17, [x16, #offset]
+                0x11, 0xf2, 0x46, 0xf9,
+                // add x16, x16, #offset
+                0x10, 0x82, 0x37, 0x91,
+                // br x17
+                0x20, 0x02, 0x1f, 0xd6,
+            ];
+            let what = got_ptr.as_ptr() as isize - 4;
+            let at = plt_ptr as isize + 2;
+            plt_val[2..6].copy_from_slice(&i32::to_ne_bytes(i32::try_from(what - at).unwrap()));
+            std::ptr::write(plt_ptr, plt_val);
+             */
+            // TODO. let's trap for now
+            let plt_val = [
+                // brk #0
+                0x00, 0x00, 0x20, 0xd4, 0x00, 0x00, 0x20, 0xd4, 0x00, 0x00, 0x20, 0xd4, 0x00, 0x00,
+                0x20, 0xd4,
+            ];
+            // dbg!(plt_ptr);
+            std::ptr::write(plt_ptr, plt_val);
+        }
     }
 
     fn get_address(&self, name: &ModuleRelocTarget) -> *const u8 {
