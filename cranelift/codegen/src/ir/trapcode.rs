@@ -1,7 +1,7 @@
 //! Trap codes describing the reason for a trap.
 
 use core::fmt::{self, Display, Formatter};
-use core::num::NonZeroU8;
+use core::num::NonZeroU16;
 use core::str::FromStr;
 #[cfg(feature = "enable-serde")]
 use serde_derive::{Deserialize, Serialize};
@@ -11,19 +11,19 @@ use serde_derive::{Deserialize, Serialize};
 /// All trap instructions have an explicit trap code.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
-pub struct TrapCode(NonZeroU8);
+pub struct TrapCode(NonZeroU16);
 
 impl TrapCode {
     /// Number of reserved opcodes for Cranelift itself. This number of traps are
     /// defined below starting at the high end of the byte space (e.g. 255, 254,
     /// ...)
-    const RESERVED: u8 = 5;
-    const RESERVED_START: u8 = u8::MAX - Self::RESERVED + 1;
+    const RESERVED: u16 = 5;
+    const RESERVED_START: u16 = u16::MAX - Self::RESERVED + 1;
 
     /// Internal helper to create new reserved trap codes.
-    const fn reserved(byte: u8) -> TrapCode {
+    const fn reserved(byte: u16) -> TrapCode {
         if let Some(code) = byte.checked_add(Self::RESERVED_START) {
-            if let Some(nz) = NonZeroU8::new(code) {
+            if let Some(nz) = NonZeroU16::new(code) {
                 return TrapCode(nz);
             }
         }
@@ -51,18 +51,18 @@ impl TrapCode {
     ///
     /// Returns `None` if `code` is zero or too large and is reserved by
     /// Cranelift.
-    pub const fn user(code: u8) -> Option<TrapCode> {
+    pub const fn user(code: u16) -> Option<TrapCode> {
         if code >= Self::RESERVED_START {
             return None;
         }
-        match NonZeroU8::new(code) {
+        match NonZeroU16::new(code) {
             Some(nz) => Some(TrapCode(nz)),
             None => None,
         }
     }
 
     /// Alias for [`TrapCode::user`] with a panic built-in.
-    pub const fn unwrap_user(code: u8) -> TrapCode {
+    pub const fn unwrap_user(code: u16) -> TrapCode {
         match TrapCode::user(code) {
             Some(code) => code,
             None => panic!("invalid user trap code"),
@@ -70,13 +70,13 @@ impl TrapCode {
     }
 
     /// Returns the raw byte representing this trap.
-    pub const fn as_raw(&self) -> NonZeroU8 {
+    pub const fn as_raw(&self) -> NonZeroU16 {
         self.0
     }
 
     /// Creates a trap code from its raw byte, likely returned by
     /// [`TrapCode::as_raw`] previously.
-    pub const fn from_raw(byte: NonZeroU8) -> TrapCode {
+    pub const fn from_raw(byte: NonZeroU16) -> TrapCode {
         TrapCode(byte)
     }
 
